@@ -12,10 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
-// The program specifies the M and the N of the row matrix.
-// Processes are organized as a 1D array.
-// N is the amount of rows.
-// p = |process|; n % p == 0
+#include "vector.h"
 
 // name, key, arg name, falgs, doc, group
 static struct argp_option options[] = {
@@ -84,4 +81,12 @@ int main(int argc, char **argv) {
         load_matrix(&args);
     }
 
+    struct vector_t vector;
+    vector_init(&vector, 10);
+    vector.elements[0] = 10.0;
+    vector.elements[1] = 5.3;
+    vector_print(&vector);
+    vector_free(&vector);
+
 }
+
