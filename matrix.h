@@ -12,6 +12,8 @@ struct matrix_t {
 
 void matrix_init(struct matrix_t *self, uint32_t nrows, uint32_t ncols);
 void matrix_free(struct matrix_t *self);
+void matrix_copy(struct matrix_t *self, const struct matrix_t *from);
+
 void matrix_print(const struct matrix_t *self);
 
 #endif

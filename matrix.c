@@ -21,8 +21,29 @@ void matrix_free(struct matrix_t *self) {
     free(self->rows);
 }
 
-void matrix_print(const struct matrix_t *self) {
-    for (uint32_t i = 0; i < self->nrows; i++) {
-        vector_print(self->rows[i]);
+void matrix_copy(struct matrix_t *self, const struct matrix_t *from) {
+    matrix_init(self, from->nrows, from->ncols);
+
+    for (uint32_t r = 0; r < self->nrows; r++) {
+        for (uint32_t c = 0; c < self->ncols; c++) {
+            self->rows[r]->elements[c] = from->rows[r]->elements[c];
+        }
     }
+}
+
+void matrix_print(const struct matrix_t *self) {
+
+    if (self->nrows == 0) {
+        fprintf(stdout, "[ empty ] \n");
+        return;
+    }
+
+    fprintf(stdout, "[\n");
+    for (uint32_t i = 0; i < self->nrows; i++) {
+        char buf[2 + 9 * self->ncols + 5];
+        vector_sprint(self->rows[i], buf);
+        fprintf(stdout, "  %s,\n", buf);
+
+    }
+    fprintf(stdout, "]\n");
 }

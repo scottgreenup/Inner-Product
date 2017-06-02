@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "vector.h"
 
@@ -26,6 +27,19 @@ void vector_print(const struct vector_t *self) {
         fprintf(fd, ", %lg", self->elements[i]);
     }
     fprintf(fd, "]\n");
+}
+
+void vector_sprint(const struct vector_t *self, char *buf) {
+    sprintf(buf, "[");
+
+    if (self->size > 0) {
+        sprintf(buf + strlen(buf), "%lg", self->elements[0]);
+    }
+    for (uint32_t i = 1; i < self->size; i++) {
+        sprintf(buf + strlen(buf), ", %lg", self->elements[i]);
+    }
+
+    sprintf(buf + strlen(buf), "]");
 }
 
 double vector_dot_product(const struct vector_t *a, const struct vector_t *b) {
