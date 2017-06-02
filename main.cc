@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <list>
 
 #include "matrix.h"
 #include "timer.h"
@@ -18,6 +19,8 @@
 
 const int MPI_DEFAULT_TAG = 1;
 const int MPI_MASTER_ID = 0;
+
+typedef std::map<uint32_t, std::map<uint32_t, double>> DotResults;
 
 // name, key, arg name, falgs, doc, group
 static struct argp_option options[] = {
@@ -73,25 +76,24 @@ bool doubleEqual(double a, double b, double delta=0.0001) {
     return (diff < delta);
 }
 
-bool serial(const Matrix& matrix, const std::vector<double>& results) {
+bool serial(const Matrix& matrix, DotResults results) {
     std::cout << std::endl;
     std::cout << "Performing serial check of the values." << std::endl;
-
-    auto it = results.cbegin();
 
     for (uint32_t i = 0; i < matrix.rows(); i++) {
         for (uint32_t j = i+1; j < matrix.rows(); j++) {
             double result = matrix[i].Dot(matrix[j]);
-            std::cout << "(" << i << ", " << j << "): " << result << std::endl;
 
-            if (it == results.cend() || !doubleEqual(result, *it)) {
-                std::cout << "Failed" << std::endl;
+            if (!doubleEqual(results[i][j], result)) {
+                std::cout << "(" << i << ", " << j << "): " << result << std::endl;
+                std::cout << "and did not match... ";
+                std::cout << results[i][j] << std::endl;
                 return false;
             }
-
-            ++it;
         }
     }
+
+    return true;
 }
 
 class WorkPair {
@@ -121,8 +123,6 @@ public:
     static std::vector<WorkPair> Unmarshal(uint32_t* marshalled_data) {
         uint32_t bufSize = marshalled_data[0];
 
-        std::cout << bufSize << std::endl;
-
         std::vector<WorkPair> workload(bufSize);
 
         for (uint32_t i = 0; i < bufSize; i++) {
@@ -134,8 +134,43 @@ public:
     }
 };
 
-void parallel_worker(const struct arguments& args, int id) {
+class Result {
+public:
+    uint32_t a;
+    uint32_t b;
+    double result;
 
+
+    static size_t MarshalSize() {
+        return sizeof(uint32_t) * 2 + sizeof(double);
+    }
+
+    char* Marshal() {
+        char* data = new char[MarshalSize()];
+        char* ptr = &data[0];
+
+        (reinterpret_cast<uint32_t*>(ptr))[0] = a;
+        ptr += sizeof(uint32_t);
+        (reinterpret_cast<uint32_t*>(ptr))[0] = b;
+        ptr += sizeof(uint32_t);
+        (reinterpret_cast<double*>(ptr))[0] = result;
+
+        return data;
+    }
+
+    void Unmarshal(char* ser) {
+        char* data = new char[MarshalSize()];
+        char* ptr = &ser[0];
+
+        a = (reinterpret_cast<uint32_t*>(ptr))[0];
+        ptr += sizeof(uint32_t);
+        b = (reinterpret_cast<uint32_t*>(ptr))[0];
+        ptr += sizeof(uint32_t);
+        result = (reinterpret_cast<double*>(ptr))[0];
+    }
+};
+
+void parallel_worker(const struct arguments& args, int id) {
     uint32_t serialized_size;
     MPI_Recv(
         &serialized_size,
@@ -157,7 +192,6 @@ void parallel_worker(const struct arguments& args, int id) {
         MPI_STATUS_IGNORE);
 
     Matrix m(serialized_data);
-    std::cout << m.ToString() << std::endl;
 
     MPI_Recv(
         &serialized_size,
@@ -180,19 +214,49 @@ void parallel_worker(const struct arguments& args, int id) {
         MPI_STATUS_IGNORE);
 
     std::vector<WorkPair> workload = WorkPair::Unmarshal(serialized_data);
+    delete serialized_data;
 
-    sleep(id);
+    std::vector<char*> marshals(workload.size());
+    std::vector<MPI_Request> requests;
+
     for (WorkPair& wp : workload) {
-        std::cout << id << ": (" << wp.a << ", " << wp.b << ")" << std::endl;
+        Result result;
+        result.a = wp.a;
+        result.b = wp.b;
+        result.result = m[wp.a].Dot(m[wp.b]);
+
+        char* m = result.Marshal();
+        marshals.push_back(m);
+        requests.push_back(MPI_Request());
+
+        MPI_Isend(
+            m,
+            Result::MarshalSize(),
+            MPI_CHAR,
+            MPI_MASTER_ID,
+            MPI_DEFAULT_TAG,
+            MPI_COMM_WORLD,
+            &requests.back());
+
+        if (args.verbose) {
+            std::cout
+                << "Sending: (" << result.a << ", " << result.b << ")"
+                << " == " << result.result << std::endl;
+        }
     }
 
-    //std::cout << m.ToString() << std::endl;
+    for (uint32_t i = 0; i < requests.size(); i++) {
+        MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
+    }
 
-    delete serialized_data;
+    for (uint32_t i = 0; i < marshals.size(); i++) {
+        delete marshals[i];
+    }
 }
 
-std::vector<double> parallel(const Matrix& matrix, const struct arguments* args) {
-    std::vector<double> results;
+
+DotResults parallel(const Matrix& matrix, const struct arguments* args) {
+    DotResults results;
 
     // Divide up the amount of work per worker. The divvy up is done in a round-
     // robin fashion. Here is an example with 4 workers in terms of n
@@ -207,35 +271,40 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
     //
     // This is stored in pairs[][]; where pairs[x] will be given to worker x.
 
+    // Create workloads worker_id -> Work
     std::map<uint32_t, std::vector<WorkPair>> workload;
+    uint32_t total_workload = 0;
 
     // Go through all the pairs and assign them to a worker.
     for (uint32_t i = 0; i < (args->rows / 2); i++) {
         uint32_t curr = i % args->workers;
 
-        for (uint32_t j = i; j < args->rows; j++) {
+        for (uint32_t j = i+1; j < args->rows; j++) {
             workload[curr].push_back(WorkPair(i, j));
+            total_workload++;
         }
 
         uint32_t opposite = args->rows - 1 - i;
-        for (uint32_t j = opposite; j < args->rows; j++) {
+        for (uint32_t j = opposite+1; j < args->rows; j++) {
             workload[curr].push_back(WorkPair(opposite, j));
+            total_workload++;
         }
     }
 
+    // We miss the middle row of jobs if the amount of rows is even.
     if (args->rows % 2 == 1) {
         uint32_t i = (args->rows / 2);
         uint32_t curr = i % args->workers;
 
         for (uint32_t j = i; j < args->rows; j++) {
             workload[curr].push_back(WorkPair(i, j));
+            total_workload++;
         }
     }
 
     // Send a copy of the matrix to all the workers.
     std::vector<MPI_Request> requests;
     std::vector<uint32_t*> wm_data;
-
     uint32_t* buf = matrix.Serialize();
     uint32_t size = matrix.SerializeSize();
 
@@ -289,18 +358,45 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
 
 
     std::cout << "MASTER: Waiting on workers..." << std::endl;
-
     for (uint32_t i = 0; i < requests.size(); i++) {
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
     }
-
-    //for (uint32_t i = 0; i < wm_data.size(); i++) {
-    //    delete wm_data[i];
-    //}
-
+    delete buf;
     std::cout << "MASTER: Workers received data." << std::endl;
 
-    delete buf;
+    std::cout << "MASTER: Dot Products: " << total_workload << std::endl;
+    char* serialized_data = new char[Result::MarshalSize()];
+    double milestone = 0.1;
+    for (uint32_t i = 0; i < total_workload; i++) {
+        MPI_Recv(
+            serialized_data,
+            Result::MarshalSize(),
+            MPI_CHAR,
+            MPI_ANY_SOURCE,
+            MPI_DEFAULT_TAG,
+            MPI_COMM_WORLD,
+            MPI_STATUS_IGNORE);
+
+        Result result;
+        result.Unmarshal(serialized_data);
+        results[result.a][result.b] = result.result;
+        results[result.b][result.a] = result.result;
+
+        if (args->verbose) {
+            std::cout << "Received (" << result.a << ", " << result.b << ")";
+            std::cout << " == " << result.result << std::endl;
+        }
+
+        double percentage = static_cast<double>(i);
+        percentage /= static_cast<double>(total_workload);
+        if (percentage > milestone) {
+            std::cout << "MASTER: Progress at "
+                      << static_cast<uint32_t>(percentage * 100)
+                      << "%" << std::endl;
+            milestone += 0.1;
+        }
+    }
+
     return results;
 }
 
@@ -331,22 +427,25 @@ int main(int argc, char **argv) {
     assert(args.cols > 1);
     assert(args.rows > 1);
     assert(args.workers >= 1);
-    //assert(args.rows % args.workers == 0);
 
     // Generate a random matrix
-
     if (id == MPI_MASTER_ID) {
         Matrix matrix(args.rows, args.cols);
         random_matrix(matrix, &args);
-        std::cout << matrix.ToString() << std::endl;
+
+        if (args.verbose) {
+            std::cout << matrix.ToString() << std::endl;
+        }
 
         // Copy the matrix for serial and parallel calculations.
         Matrix matrix_serial(matrix);
         Matrix matrix_parallel(matrix);
 
-        std::vector<double> results = parallel(matrix_parallel, &args);
+        DotResults results = parallel(matrix_parallel, &args);
 
-        serial(matrix_serial, results);
+        if (serial(matrix_serial, results)) {
+            std::cout << "Serial check passed." << std::endl;
+        }
     } else {
         parallel_worker(args, id);
     }

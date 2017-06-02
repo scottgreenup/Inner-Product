@@ -45,6 +45,14 @@ public:
         }
     }
 
+    static void MinDelta(std::string name, double min=0.01) {
+        Timer& timer = Timer::getInstance();
+        double dt = timer.Delta();
+        if (dt >= min) {
+            std::cout << name << ": " << dt << std::endl;
+        }
+    }
+
 private:
 
     Timer() {
