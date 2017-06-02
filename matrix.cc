@@ -21,8 +21,24 @@ Matrix::Matrix(const Matrix& other)
     }
 }
 
-Matrix::~Matrix() {
+Matrix::Matrix(uint32_t* ser) {
+    m_nrows = ser[0];
+    m_ncols = ser[1];
+
+    uint32_t index = 2;
+
+    for (uint32_t i = 0; i < m_nrows; i++) {
+        Vector row(m_ncols);
+        for (uint32_t j = 0; j < m_ncols; j++) {
+            row[j] = ser[index];
+            ++index;
+        }
+        m_rows.push_back(row);
+    }
+
 }
+
+Matrix::~Matrix() { }
 
 std::string Matrix::ToString() const {
     if (m_nrows == 0) {
@@ -37,4 +53,26 @@ std::string Matrix::ToString() const {
     ss << "]";
 
     return ss.str();
+}
+
+uint32_t Matrix::SerializeSize() const {
+    return 2 + m_nrows * m_ncols;
+}
+
+uint32_t* Matrix::Serialize() const {
+    uint32_t sz = SerializeSize();
+    uint32_t* buf = new uint32_t[sz];
+    buf[0] = m_nrows;
+    buf[1] = m_ncols;
+
+    uint32_t index = 2;
+
+    for (uint32_t i = 0; i < m_nrows; i++) {
+        for (uint32_t j = 0; j < m_ncols; j++) {
+            buf[index] = m_rows[i][j];
+            ++index;
+        }
+    }
+
+    return buf;
 }

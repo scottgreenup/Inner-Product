@@ -16,14 +16,13 @@
 #include "timer.h"
 #include "vector.h"
 
+const int MPI_DEFAULT_TAG = 1;
+const int MPI_MASTER_ID = 0;
+
 // name, key, arg name, falgs, doc, group
 static struct argp_option options[] = {
     {"columns",   'm', "columns",   0, "The size of each vector."},
     {"rows",      'n', "rows",      0, "The number of vectors."},
-    {"processes", 'p', "processes", 0, "The number of workers."},
-    {"input",     'i', "filename",  0,
-        "Load matrix from filename. Requires --columns and --rows. "
-        "If missing, a random matrix will be created and echoed." },
     {"verbose",   'v', 0,           0, "Verbose mode."},
     {0}
 };
@@ -31,8 +30,7 @@ static struct argp_option options[] = {
 struct arguments {
     uint32_t cols;
     uint32_t rows;
-    uint32_t workers; // A.K.A. processes
-    std::string input_filename;
+    uint32_t workers;
     bool verbose;
 };
 
@@ -41,8 +39,6 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
     switch (key) {
         case 'm': args->cols = atoi(arg); break;
         case 'n': args->rows = atoi(arg); break;
-        case 'p': args->workers = atoi(arg); break;
-        case 'i': args->input_filename = arg; break;
         case 'v': args->verbose = true; break;
     }
     return 0;
@@ -105,6 +101,34 @@ public:
     WorkPair(uint32_t a, uint32_t b) : a(a), b(b) { }
 };
 
+void parallel_worker(const struct arguments& args, int id) {
+    uint32_t serialized_size;
+    MPI_Recv(
+        &serialized_size,
+        1,
+        MPI_INT,
+        MPI_MASTER_ID,
+        MPI_DEFAULT_TAG,
+        MPI_COMM_WORLD,
+        MPI_STATUS_IGNORE);
+
+    uint32_t* serialized_data = new uint32_t[serialized_size];
+    MPI_Recv(
+        serialized_data,
+        serialized_size,
+        MPI_INT,
+        MPI_MASTER_ID,
+        MPI_DEFAULT_TAG,
+        MPI_COMM_WORLD,
+        MPI_STATUS_IGNORE);
+
+    Matrix m(serialized_data);
+
+    //std::cout << m.ToString() << std::endl;
+
+    delete serialized_data;
+}
+
 std::vector<double> parallel(const Matrix& matrix, const struct arguments* args) {
     std::vector<double> results;
 
@@ -125,7 +149,6 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
 
     // Go through all the pairs and assign them to a worker.
     for (uint32_t i = 0; i < (args->rows / 2); i++) {
-
         uint32_t curr = i % args->workers;
 
         for (uint32_t j = i; j < args->rows; j++) {
@@ -133,7 +156,6 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
         }
 
         uint32_t opposite = args->rows - 1 - i;
-
         for (uint32_t j = opposite; j < args->rows; j++) {
             work[curr].push_back(WorkPair(opposite, j));
         }
@@ -148,8 +170,36 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
         }
     }
 
+    // Send a copy of the matrix to all the workers.
+    MPI_Request requests_size[args->workers];
+    MPI_Request requests_data[args->workers];
+    uint32_t* buf = matrix.Serialize();
+    uint32_t size = matrix.SerializeSize();
+
     for (auto& workv : work) {
-        std::cout << "Worker " << workv.first << " given " << workv.second.size() << " jobs." <<  std::endl;
+        std::cout
+            << "Worker " << workv.first
+            << " given " << workv.second.size() << " jobs." <<  std::endl;
+
+        uint32_t pid = workv.first + 1;
+
+        MPI_Isend(
+            &size,
+            1,
+            MPI_INT,
+            pid,
+            MPI_DEFAULT_TAG,
+            MPI_COMM_WORLD,
+            &requests_size[pid - 1]);
+
+        MPI_Isend(
+            buf,
+            size,
+            MPI_INT,
+            pid,
+            MPI_DEFAULT_TAG,
+            MPI_COMM_WORLD,
+            &requests_data[pid - 1]);
 
         /*
         for (auto& pair : workv.second) {
@@ -160,49 +210,65 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
 
     }
 
+    std::cout << "Waiting for workers to recieve matrix." << std::endl;
+    for (uint32_t i = 0; i < args->workers; i++) {
+        MPI_Wait(&requests_size[i], MPI_STATUS_IGNORE);
+        MPI_Wait(&requests_data[i], MPI_STATUS_IGNORE);
+    }
+    std::cout << "All workers have a copy of the matrix." << std::endl;
+
+    delete buf;
     return results;
 }
 
 int main(int argc, char **argv) {
-    srand(time(NULL));
+    int id;
+    int num_procs;
+    int retval;
 
+    if ((retval = MPI_Init(&argc, &argv)) != MPI_SUCCESS) {
+        print_and_exit(retval, "Could not initialize MPI");
+    }
+
+    if ((retval = MPI_Comm_size(MPI_COMM_WORLD, &num_procs)) != MPI_SUCCESS) {
+        print_and_exit(retval, "Error getting number of processes in MPI");
+    }
+
+    if ((retval = MPI_Comm_rank(MPI_COMM_WORLD, &id)) != MPI_SUCCESS) {
+        print_and_exit(retval, "Error getting rank/id from MPI");
+    }
+
+    // Parse and perform argument validation.
     struct arguments args;
     args.cols = 0;
     args.rows = 0;
-    args.workers = 0;
-    args.input_filename = "-";
+    args.workers = num_procs - 1;
     args.verbose = false;
     argp_parse(&argp, argc, argv, 0, 0, &args);
-
     assert(args.cols > 1);
     assert(args.rows > 1);
     assert(args.workers > 1);
     assert(args.rows % args.workers == 0);
 
-    Matrix matrix(args.rows, args.cols);
-    random_matrix(matrix, &args);
+    // Generate a random matrix
 
-    std::cout << matrix.ToString() << std::endl;
+    if (id == MPI_MASTER_ID) {
+        Matrix matrix(args.rows, args.cols);
+        random_matrix(matrix, &args);
+        std::cout << matrix.ToString() << std::endl;
 
-    Matrix matrix_serial(matrix);
-    Matrix matrix_parallel(matrix);
+        // Copy the matrix for serial and parallel calculations.
+        Matrix matrix_serial(matrix);
+        Matrix matrix_parallel(matrix);
 
-    Timer::Start();
+        std::vector<double> results = parallel(matrix_parallel, &args);
 
-    std::vector<double> results = parallel(matrix_parallel, &args);
-    Timer::DeltaRemember("parallel(...)");
+        serial(matrix_serial, results);
+    } else {
+        parallel_worker(args, id);
+    }
 
-    serial(matrix_serial, results);
-    Timer::DeltaRemember("  serial(...)");
-
-    Timer::PrintDelta();
-
-    //struct vector_t vector;
-    //vector_init(&vector, 10);
-    //vector.elements[0] = 10.0;
-    //vector.elements[1] = 5.3;
-    //vector_print(&vector);
-    //vector_free(&vector);
-
+    MPI_Finalize();
+    return 0;
 }
 

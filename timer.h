@@ -47,7 +47,9 @@ public:
 
 private:
 
-    Timer() {}
+    Timer() {
+        srand(time(NULL));
+    }
     Timer(const Timer& other) {}
     ~Timer() {}
 
@@ -55,6 +57,8 @@ private:
         static Timer timer;
         return timer;
     }
+
+
 
     struct timeval m_tv;
 

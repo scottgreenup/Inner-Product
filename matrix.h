@@ -9,6 +9,7 @@
 class Matrix {
 public:
     Matrix(uint32_t nrows, uint32_t ncols);
+    Matrix(uint32_t* serialized_matrix);
     Matrix(const Matrix& other);
 
     ~Matrix();
@@ -31,6 +32,9 @@ public:
     uint32_t cols() const {
         return m_ncols;
     }
+
+    uint32_t SerializeSize() const;
+    uint32_t* Serialize() const;
 
 private:
     uint32_t m_ncols;
