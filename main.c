@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "matrix.h"
 #include "vector.h"
 
 // name, key, arg name, falgs, doc, group
@@ -53,15 +54,41 @@ void print_and_exit(uint32_t errnum, const char *message) {
     exit(errnum);
 }
 
-void load_matrix(const struct arguments *args) {
+struct matrix_t* load_matrix(const struct arguments *args) {
 
+    return 0x0;
 }
 
-void random_matrix(const struct arguments *args) {
+double generate_random() {
+    double mul = (rand() % 2 == 0) ? -1.0 : 1.0;
+    mul = 1.0;
+    double range = 16;
+    range = 9;
+    return (((float)rand()) / ((float)(RAND_MAX))) * mul * range;
+}
 
+void random_matrix(struct matrix_t* matrix, const struct arguments *args) {
+    matrix_init(matrix, args->rows, args->cols);
+
+    for (uint32_t r = 0; r < args->rows; r++) {
+        for (uint32_t c = 0; c < args->cols; c++) {
+            matrix->rows[r]->elements[c] = (int)generate_random();
+        }
+    }
+}
+
+void serial(struct matrix_t* matrix) {
+    for (uint32_t i = 0; i < matrix->nrows; i++) {
+        for (uint32_t j = i+1; j < matrix->nrows; j++) {
+            fprintf(stderr, "%lg ", vector_dot_product(matrix->rows[i], matrix->rows[j]));
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 int main(int argc, char **argv) {
+    srand(time(NULL));
+
     struct arguments args;
     args.cols = 0;
     args.rows = 0;
@@ -75,18 +102,22 @@ int main(int argc, char **argv) {
     assert(args.workers > 1);
     assert(args.rows % args.workers == 0);
 
+    struct matrix_t matrix;
     if (strcmp(args.input_filename, "-") == 0) {
-        random_matrix(&args);
+        random_matrix(&matrix, &args);
     } else {
         load_matrix(&args);
     }
 
-    struct vector_t vector;
-    vector_init(&vector, 10);
-    vector.elements[0] = 10.0;
-    vector.elements[1] = 5.3;
-    vector_print(&vector);
-    vector_free(&vector);
+    matrix_print(&matrix);
 
+    serial(&matrix);
+
+    //struct vector_t vector;
+    //vector_init(&vector, 10);
+    //vector.elements[0] = 10.0;
+    //vector.elements[1] = 5.3;
+    //vector_print(&vector);
+    //vector_free(&vector);
 }
 
