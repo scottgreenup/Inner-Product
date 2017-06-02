@@ -189,17 +189,13 @@ int main(int argc, char **argv) {
     Timer::Start();
 
     serial(matrix_serial);
+    Timer::DeltaRemember("  serial(...)");
 
-    double dt_serial = Timer::Delta();
+    parallel(matrix_parallel, &args);
+    Timer::DeltaRemember("parallel(...)");
 
-    //parallel(&copy_parallel, &args);
-    //gettimeofday(&tc, NULL);
 
-    //double parallel_dt = timeval_diff(tb, tc);
-
-    std::cout << "serial time = " << dt_serial << std::endl;
-    //printf("parallel time = %lf\n", parallel_dt);
-
+    Timer::PrintDelta();
     //struct vector_t vector;
     //vector_init(&vector, 10);
     //vector.elements[0] = 10.0;

@@ -2,6 +2,9 @@
 #define _TIMER_H_
 
 #include <ctime>
+#include <iostream>
+#include <map>
+#include <string>
 
 class Timer {
 public:
@@ -25,6 +28,23 @@ public:
         return dt;
     }
 
+    static void DeltaPrint(std::string name) {
+        Timer& timer = Timer::getInstance();
+        std::cout << name << ": " << timer.Delta() << std::endl;
+    }
+
+    static void DeltaRemember(std::string name) {
+        Timer& timer = Timer::getInstance();
+        timer.m_deltas[name] = timer.Delta();
+    }
+
+    static void PrintDelta() {
+        Timer& timer = Timer::getInstance();
+        for (auto& it : timer.m_deltas) {
+            std::cout << it.first << ": " << it.second << std::endl;
+        }
+    }
+
 private:
 
     Timer() {}
@@ -37,6 +57,8 @@ private:
     }
 
     struct timeval m_tv;
+
+    std::map<std::string, double> m_deltas;
 };
 
 #endif
