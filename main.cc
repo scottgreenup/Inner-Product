@@ -98,10 +98,44 @@ class WorkPair {
 public:
     uint32_t a;
     uint32_t b;
+    WorkPair() : a(0), b(0) {}
     WorkPair(uint32_t a, uint32_t b) : a(a), b(b) { }
+
+    static uint32_t MarshalSize(const std::vector<WorkPair>& workload) {
+        // Room for the size and for each pair of ints.
+        return 1 + workload.size() * 2;
+    }
+
+    static uint32_t* Marshal(const std::vector<WorkPair>& workload) {
+        uint32_t bufSize = WorkPair::MarshalSize(workload);
+        uint32_t* buf = new uint32_t[bufSize];
+        buf[0] = workload.size();
+
+        for (uint32_t i = 0; i < workload.size(); i++) {
+            buf[1 + i*2]     = workload[i].a;
+            buf[1 + i*2 + 1] = workload[i].b;
+        }
+        return buf;
+    }
+
+    static std::vector<WorkPair> Unmarshal(uint32_t* marshalled_data) {
+        uint32_t bufSize = marshalled_data[0];
+
+        std::cout << bufSize << std::endl;
+
+        std::vector<WorkPair> workload(bufSize);
+
+        for (uint32_t i = 0; i < bufSize; i++) {
+            workload[i].a = marshalled_data[1 + i*2];
+            workload[i].b = marshalled_data[1 + i*2 +1];
+        }
+
+        return workload;
+    }
 };
 
 void parallel_worker(const struct arguments& args, int id) {
+
     uint32_t serialized_size;
     MPI_Recv(
         &serialized_size,
@@ -123,6 +157,34 @@ void parallel_worker(const struct arguments& args, int id) {
         MPI_STATUS_IGNORE);
 
     Matrix m(serialized_data);
+    std::cout << m.ToString() << std::endl;
+
+    MPI_Recv(
+        &serialized_size,
+        1,
+        MPI_INT,
+        MPI_MASTER_ID,
+        MPI_DEFAULT_TAG,
+        MPI_COMM_WORLD,
+        MPI_STATUS_IGNORE);
+
+    delete serialized_data;
+    serialized_data = new uint32_t[serialized_size];
+    MPI_Recv(
+        serialized_data,
+        serialized_size,
+        MPI_INT,
+        MPI_MASTER_ID,
+        MPI_DEFAULT_TAG,
+        MPI_COMM_WORLD,
+        MPI_STATUS_IGNORE);
+
+    std::vector<WorkPair> workload = WorkPair::Unmarshal(serialized_data);
+
+    sleep(id);
+    for (WorkPair& wp : workload) {
+        std::cout << id << ": (" << wp.a << ", " << wp.b << ")" << std::endl;
+    }
 
     //std::cout << m.ToString() << std::endl;
 
@@ -145,19 +207,19 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
     //
     // This is stored in pairs[][]; where pairs[x] will be given to worker x.
 
-    std::map<uint32_t, std::vector<WorkPair>> work;
+    std::map<uint32_t, std::vector<WorkPair>> workload;
 
     // Go through all the pairs and assign them to a worker.
     for (uint32_t i = 0; i < (args->rows / 2); i++) {
         uint32_t curr = i % args->workers;
 
         for (uint32_t j = i; j < args->rows; j++) {
-            work[curr].push_back(WorkPair(i, j));
+            workload[curr].push_back(WorkPair(i, j));
         }
 
         uint32_t opposite = args->rows - 1 - i;
         for (uint32_t j = opposite; j < args->rows; j++) {
-            work[curr].push_back(WorkPair(opposite, j));
+            workload[curr].push_back(WorkPair(opposite, j));
         }
     }
 
@@ -166,23 +228,22 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
         uint32_t curr = i % args->workers;
 
         for (uint32_t j = i; j < args->rows; j++) {
-            work[curr].push_back(WorkPair(i, j));
+            workload[curr].push_back(WorkPair(i, j));
         }
     }
 
     // Send a copy of the matrix to all the workers.
-    MPI_Request requests_size[args->workers];
-    MPI_Request requests_data[args->workers];
+    std::vector<MPI_Request> requests;
+    std::vector<uint32_t*> wm_data;
+
     uint32_t* buf = matrix.Serialize();
     uint32_t size = matrix.SerializeSize();
 
-    for (auto& workv : work) {
-        std::cout
-            << "Worker " << workv.first
-            << " given " << workv.second.size() << " jobs." <<  std::endl;
+    for (auto& work : workload) {
+        uint32_t pid = work.first + 1;
+        std::cout << "MASTER: Sending " << pid << " matrix." << std::endl;
 
-        uint32_t pid = workv.first + 1;
-
+        requests.push_back(MPI_Request());
         MPI_Isend(
             &size,
             1,
@@ -190,8 +251,9 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
             pid,
             MPI_DEFAULT_TAG,
             MPI_COMM_WORLD,
-            &requests_size[pid - 1]);
+            &requests.back());
 
+        requests.push_back(MPI_Request());
         MPI_Isend(
             buf,
             size,
@@ -199,23 +261,44 @@ std::vector<double> parallel(const Matrix& matrix, const struct arguments* args)
             pid,
             MPI_DEFAULT_TAG,
             MPI_COMM_WORLD,
-            &requests_data[pid - 1]);
+            &requests.back());
 
-        /*
-        for (auto& pair : workv.second) {
-            std::cout << pair.a << ", " << pair.b << std::endl;
-        }
-        std::cout << std::endl;
-        */
+        std::cout << "MASTER: Sending " << pid << " workload." << std::endl;
+        uint32_t wm_size = WorkPair::MarshalSize(work.second);
+        uint32_t* wm = WorkPair::Marshal(work.second);
+        wm_data.push_back(wm);
 
+        MPI_Isend(
+            &wm_size,
+            1,
+            MPI_INT,
+            pid,
+            MPI_DEFAULT_TAG,
+            MPI_COMM_WORLD,
+            &requests.back());
+
+        MPI_Isend(
+            wm,
+            wm_size,
+            MPI_INT,
+            pid,
+            MPI_DEFAULT_TAG,
+            MPI_COMM_WORLD,
+            &requests.back());
     }
 
-    std::cout << "Waiting for workers to recieve matrix." << std::endl;
-    for (uint32_t i = 0; i < args->workers; i++) {
-        MPI_Wait(&requests_size[i], MPI_STATUS_IGNORE);
-        MPI_Wait(&requests_data[i], MPI_STATUS_IGNORE);
+
+    std::cout << "MASTER: Waiting on workers..." << std::endl;
+
+    for (uint32_t i = 0; i < requests.size(); i++) {
+        MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
     }
-    std::cout << "All workers have a copy of the matrix." << std::endl;
+
+    //for (uint32_t i = 0; i < wm_data.size(); i++) {
+    //    delete wm_data[i];
+    //}
+
+    std::cout << "MASTER: Workers received data." << std::endl;
 
     delete buf;
     return results;
@@ -247,8 +330,8 @@ int main(int argc, char **argv) {
     argp_parse(&argp, argc, argv, 0, 0, &args);
     assert(args.cols > 1);
     assert(args.rows > 1);
-    assert(args.workers > 1);
-    assert(args.rows % args.workers == 0);
+    assert(args.workers >= 1);
+    //assert(args.rows % args.workers == 0);
 
     // Generate a random matrix
 
