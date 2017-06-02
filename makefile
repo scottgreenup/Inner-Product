@@ -4,4 +4,4 @@
 .PHONY: main
 
 main:
-	mpicc *.c -o main -g --std=c11
+	mpic++ *.cc -o main -g --std=c++11

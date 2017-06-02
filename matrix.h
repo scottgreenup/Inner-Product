@@ -1,19 +1,42 @@
-
 #ifndef _MATRIX_H_
 #define _MATRIX_H_
 
+#include <string>
+#include <vector>
+
 #include "vector.h"
 
-struct matrix_t {
-    struct vector_t **rows;
-    uint32_t ncols;
-    uint32_t nrows;
+class Matrix {
+public:
+    Matrix(uint32_t nrows, uint32_t ncols);
+    Matrix(const Matrix& other);
+
+    ~Matrix();
+
+    std::string ToString() const;
+
+    Vector& operator[](size_t index) {
+        return m_rows[index];
+    }
+
+    const Vector& operator[](size_t index) const {
+        return m_rows[index];
+    }
+
+
+    uint32_t rows() const {
+        return m_nrows;
+    }
+
+    uint32_t cols() const {
+        return m_ncols;
+    }
+
+private:
+    uint32_t m_ncols;
+    uint32_t m_nrows;
+
+    std::vector<Vector> m_rows;
 };
-
-void matrix_init(struct matrix_t *self, uint32_t nrows, uint32_t ncols);
-void matrix_free(struct matrix_t *self);
-void matrix_copy(struct matrix_t *self, const struct matrix_t *from);
-
-void matrix_print(const struct matrix_t *self);
 
 #endif

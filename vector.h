@@ -1,16 +1,29 @@
 #ifndef _VECTOR_H_
 #define _VECTOR_H_
 
-struct vector_t {
-    double *elements;
-    uint32_t size;
+#include <string>
+#include <vector>
+
+class Vector {
+public:
+    Vector(uint32_t size);
+    Vector(const Vector& other);
+    ~Vector();
+
+    double Dot(const Vector& other) const;
+    std::string ToString() const;
+
+    double& operator[](size_t index) {
+        return m_elements[index];
+    }
+
+    const double& operator[](size_t index) const {
+        return m_elements[index];
+    }
+
+private:
+    std::vector<double> m_elements;
+    uint32_t m_size;
 };
-
-void vector_init(struct vector_t *self, uint32_t size);
-void vector_free(struct vector_t *self);
-void vector_print(const struct vector_t *self);
-void vector_sprint(const struct vector_t *self, char *buf);
-
-double vector_dot_product(const struct vector_t *a, const struct vector_t *b);
 
 #endif
