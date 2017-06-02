@@ -71,28 +71,43 @@ void random_matrix(Matrix& matrix, const struct arguments *args) {
     }
 }
 
-void serial(const Matrix& matrix) {
+bool doubleEqual(double a, double b, double delta=0.0001) {
+    double diff = a - b;
+    diff = (diff < 0 ? -diff : diff);
+    return (diff < delta);
+}
+
+bool serial(const Matrix& matrix, const std::vector<double>& results) {
     std::cout << std::endl;
     std::cout << "Performing serial check of the values." << std::endl;
 
+    auto it = results.cbegin();
+
     for (uint32_t i = 0; i < matrix.rows(); i++) {
         for (uint32_t j = i+1; j < matrix.rows(); j++) {
-            std::cout << matrix[i].Dot(matrix[j]) << " ";
+            double result = matrix[i].Dot(matrix[j]);
+            std::cout << "(" << i << ", " << j << "): " << result << std::endl;
+
+            if (it == results.cend() || !doubleEqual(result, *it)) {
+                std::cout << "Failed" << std::endl;
+                return false;
+            }
+
+            ++it;
         }
-        std::cout << std::endl;
     }
 }
 
-struct pair_t {
+class WorkPair {
+public:
     uint32_t a;
     uint32_t b;
+    WorkPair(uint32_t a, uint32_t b) : a(a), b(b) { }
 };
 
-uint32_t number_of_pairs(uint32_t rows) {
-    return ((rows - 1) * rows) / 2;
-}
+std::vector<double> parallel(const Matrix& matrix, const struct arguments* args) {
+    std::vector<double> results;
 
-void parallel(const Matrix& matrix, const struct arguments* args) {
     // Divide up the amount of work per worker. The divvy up is done in a round-
     // robin fashion. Here is an example with 4 workers in terms of n
     //
@@ -105,61 +120,47 @@ void parallel(const Matrix& matrix, const struct arguments* args) {
     //      ...
     //
     // This is stored in pairs[][]; where pairs[x] will be given to worker x.
-//
-//    uint32_t npairs = number_of_pairs(args->rows);
-//    uint32_t npairs_per_worker = (npairs / args->workers) + 1;
-//    struct pair_t pairs[args->workers][npairs_per_worker];
-//
-//    // This tracks the current index for each pair.
-//    uint32_t counts[args->workers];
-//    for (uint32_t i = 0; i < args->workers; i++) {
-//        counts[i] = 0;
-//    }
-//
-//    // Go through all the pairs and assign them to a worker.
-//    for (uint32_t i = 0; i < (args->rows / 2); i++) {
-//
-//        uint32_t current_worker = i % args->workers;
-//
-//        for (uint32_t j = i; j < args->rows; j++) {
-//            pairs[current_worker][counts[current_worker]].a = i;
-//            pairs[current_worker][counts[current_worker]].b = j;
-//            counts[current_worker]++;
-//        }
-//
-//        uint32_t opposite = args->rows - 1 - i;
-//
-//        for (uint32_t j = opposite; j < args->rows; j++) {
-//            pairs[current_worker][counts[current_worker]].a = opposite;
-//            pairs[current_worker][counts[current_worker]].b = j;
-//            counts[current_worker]++;
-//        }
-//    }
-//
-//    if (args->rows % 2 == 1) {
-//        uint32_t current_worker = (args->rows / 2) % args->workers;
-//        //pairs[current_worker] a
-//    }
-//
-//
-//    return;
-//
-//    // There are n-1 + n-2 + ... + 2 + 1 pairs...
-//
-//    for (uint32_t i = 0; i < args->rows; i++) {
-//        fprintf(stderr, "%d == %d pairs\n", i, number_of_pairs(i));
-//    }
-//
-//    // python code:
-//
-//    // There are args->nrows to be split upon args->workers. We can
-}
 
-long get_time() {
-    return clock();
-}
+    std::map<uint32_t, std::vector<WorkPair>> work;
 
-double timeval_diff(struct timeval ta, struct timeval tb) {
+    // Go through all the pairs and assign them to a worker.
+    for (uint32_t i = 0; i < (args->rows / 2); i++) {
+
+        uint32_t curr = i % args->workers;
+
+        for (uint32_t j = i; j < args->rows; j++) {
+            work[curr].push_back(WorkPair(i, j));
+        }
+
+        uint32_t opposite = args->rows - 1 - i;
+
+        for (uint32_t j = opposite; j < args->rows; j++) {
+            work[curr].push_back(WorkPair(opposite, j));
+        }
+    }
+
+    if (args->rows % 2 == 1) {
+        uint32_t i = (args->rows / 2);
+        uint32_t curr = i % args->workers;
+
+        for (uint32_t j = i; j < args->rows; j++) {
+            work[curr].push_back(WorkPair(i, j));
+        }
+    }
+
+    for (auto& workv : work) {
+        std::cout << "Worker " << workv.first << " given " << workv.second.size() << " jobs." <<  std::endl;
+
+        /*
+        for (auto& pair : workv.second) {
+            std::cout << pair.a << ", " << pair.b << std::endl;
+        }
+        std::cout << std::endl;
+        */
+
+    }
+
+    return results;
 }
 
 int main(int argc, char **argv) {
@@ -188,14 +189,14 @@ int main(int argc, char **argv) {
 
     Timer::Start();
 
-    serial(matrix_serial);
-    Timer::DeltaRemember("  serial(...)");
-
-    parallel(matrix_parallel, &args);
+    std::vector<double> results = parallel(matrix_parallel, &args);
     Timer::DeltaRemember("parallel(...)");
 
+    serial(matrix_serial, results);
+    Timer::DeltaRemember("  serial(...)");
 
     Timer::PrintDelta();
+
     //struct vector_t vector;
     //vector_init(&vector, 10);
     //vector.elements[0] = 10.0;
